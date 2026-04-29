@@ -123,7 +123,12 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
         
         // Determine winning face
         const degY = (targetSnapY.current * 180 / Math.PI) % 360
-        let index = Math.round((150 - degY) / 60) % 6
+        
+        // When falling backward (-90 deg on X), the face that goes UP (+Y) 
+        // is the one that was pointing FORWARD (+Z, 0 degrees) before the fall.
+        // World angle = i * 60 + 30 + degY = 0
+        // i = (-30 - degY) / 60
+        let index = Math.round((-30 - degY) / 60) % 6
         if (index < 0) index += 6
         
         // Wait 1.5 seconds before showing the result banner
