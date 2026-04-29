@@ -22,7 +22,7 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
   const groupRef = useRef<THREE.Group>(null)
   
   // Physics state
-  const [phase, setPhase] = useState<'idle' | 'spinning' | 'falling'>('idle')
+  const [phase, setPhase] = useState<'idle' | 'spinning' | 'falling' | 'waiting'>('idle')
   const angularVelocity = useRef(0)
   const wobblePhase = useRef(0)
   
@@ -35,25 +35,33 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
   
   // Reset when starting
   useEffect(() => {
-    if (appState === 'playing' && phase === 'idle' && angularVelocity.current === 0) {
+    if (appState === 'playing') {
         if (groupRef.current) {
           groupRef.current.rotation.set(0, 0, 0)
           groupRef.current.position.set(0, 1.5, 0)
+          angularVelocity.current = 0
+          setPhase('idle')
         }
     }
-  }, [appState, phase])
+  }, [appState])
 
-  const bind = useDrag(({ velocity: [vx], direction: [dx], active }) => {
+  const bind = useDrag(({ swipe: [swipeX], velocity: [vx], active, movement: [mx] }) => {
     if (appState !== 'playing' || phase !== 'idle') return
     
-    // Allow even smaller swipes to trigger a spin
-    if (!active && Math.abs(vx) > 0.05) { 
-      // Base speed ensures it spins a few times even with a light swipe
-      const speed = Math.min(Math.abs(vx) * 25 + 15, 60)
-      // Use the direction of the swipe (dx can be 0, so fallback to 1 if needed, though rare)
-      const dir = dx === 0 ? 1 : Math.sign(dx)
-      angularVelocity.current = speed * dir
-      setPhase('spinning')
+    // Trigger spin when drag ends
+    if (!active) { 
+      // It's a valid swipe if useGesture detected a swipe, OR if dragged > 20px
+      if (swipeX !== 0 || Math.abs(mx) > 20) {
+        // Base speed ensures it spins even with a light swipe or if paused before release
+        const baseVx = Math.max(Math.abs(vx), Math.abs(mx) / 100)
+        const speed = Math.min(baseVx * 25 + 20, 60)
+        
+        // Direction based on swipeX or movement
+        const dir = swipeX !== 0 ? Math.sign(swipeX) : Math.sign(mx)
+        
+        angularVelocity.current = speed * dir
+        setPhase('spinning')
+      }
     }
   }, { filterTaps: true })
 
@@ -69,12 +77,11 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
       // Apply friction
       angularVelocity.current *= damping
 
-      // Wobble effect as it slows down
+      // Wobble effect as it slows down (reduced threshold so it wobbles less time)
       const absVelocity = Math.abs(angularVelocity.current)
-      if (absVelocity < 12 && absVelocity > 0.1) {
+      if (absVelocity < 6 && absVelocity > 0.1) {
         wobblePhase.current += delta * 15
-        // Wobble intensity increases as speed decreases
-        const wobbleIntensity = (12 - absVelocity) * 0.04
+        const wobbleIntensity = (6 - absVelocity) * 0.04
         groupRef.current.rotation.x = Math.sin(wobblePhase.current) * wobbleIntensity
         groupRef.current.rotation.z = Math.cos(wobblePhase.current) * wobbleIntensity
       }
@@ -107,25 +114,22 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
       groupRef.current.rotation.x = THREE.MathUtils.lerp(startFallX.current, -Math.PI / 2, ease)
       groupRef.current.rotation.z = THREE.MathUtils.lerp(startFallZ.current, 0, ease)
       
-      // The distance from center to flat face is bodyRadius * cos(30) = 1.299
-      // The table is at Y = -0.5
       // Target Y so face hits Mesa: 1.299 - 0.5 = 0.799
       const targetPosY = 0.799
       groupRef.current.position.y = THREE.MathUtils.lerp(startFallPosY.current, targetPosY, ease)
 
       if (t === 1) {
-        setPhase('idle')
+        setPhase('waiting')
         
-        // Determine winning face (the one pointing +Y, which was originally at -Z)
-        // Convert snapped Y rotation to degrees
+        // Determine winning face
         const degY = (targetSnapY.current * 180 / Math.PI) % 360
-        
-        // Find which face index was at -Z before falling
-        // Formula derived: i = (150 - degY) / 60
         let index = Math.round((150 - degY) / 60) % 6
         if (index < 0) index += 6
         
-        onResult(FACES[index])
+        // Wait 1.5 seconds before showing the result banner
+        setTimeout(() => {
+          onResult(FACES[index])
+        }, 1500)
       }
     }
   })
