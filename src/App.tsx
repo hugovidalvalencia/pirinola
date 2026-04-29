@@ -41,9 +41,6 @@ function App() {
           appState={appState} 
           onResult={handleResult} 
         />
-        
-        {/* Controls just for look around during play */}
-        {appState === 'playing' && <OrbitControls enablePan={false} enableZoom={false} maxPolarAngle={Math.PI / 2 - 0.1} minPolarAngle={0.1} />}
       </Canvas>
 
       {/* UI Overlay */}

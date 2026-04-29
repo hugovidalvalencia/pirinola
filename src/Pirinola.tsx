@@ -36,10 +36,13 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
   const bind = useDrag(({ velocity: [vx], direction: [dx], active }) => {
     if (appState !== 'playing' || isSpinning) return
     
-    if (!active && vx > 0.5) { // Threshold for a valid swipe
-      // Apply initial velocity based on swipe speed and direction
-      const speed = Math.min(Math.max(vx * 15, 20), 60)
-      angularVelocity.current = speed * Math.sign(dx)
+    // Allow even smaller swipes to trigger a spin
+    if (!active && Math.abs(vx) > 0.05) { 
+      // Base speed ensures it spins a few times even with a light swipe
+      const speed = Math.min(Math.abs(vx) * 25 + 15, 60)
+      // Use the direction of the swipe (dx can be 0, so fallback to 1 if needed, though rare)
+      const dir = dx === 0 ? 1 : Math.sign(dx)
+      angularVelocity.current = speed * dir
       setIsSpinning(true)
     }
   }, { filterTaps: true })
@@ -47,7 +50,7 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
   useFrame((state, delta) => {
     if (!groupRef.current || !isSpinning) return
 
-    const damping = 0.985 // Friction
+    const damping = 0.992 // Lower friction = spins longer
     
     // Apply rotation
     groupRef.current.rotation.y += angularVelocity.current * delta
@@ -57,34 +60,39 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
 
     // Wobble effect as it slows down
     const absVelocity = Math.abs(angularVelocity.current)
-    if (absVelocity < 10 && absVelocity > 0.1) {
+    if (absVelocity < 12 && absVelocity > 0.1) {
       wobblePhase.current += delta * 15
       // Wobble intensity increases as speed decreases
-      const wobbleIntensity = (10 - absVelocity) * 0.03
+      const wobbleIntensity = (12 - absVelocity) * 0.04
       groupRef.current.rotation.x = Math.sin(wobblePhase.current) * wobbleIntensity
       groupRef.current.rotation.z = Math.cos(wobblePhase.current) * wobbleIntensity
     }
 
     // Stop condition
-    if (absVelocity < 0.1) {
+    if (absVelocity < 0.15) {
       setIsSpinning(false)
       angularVelocity.current = 0
       
       // Snap to nearest face
       const currentRot = groupRef.current.rotation.y
       const snapAngle = Math.PI / 3 // 60 degrees
-      const snappedRot = Math.round(currentRot / snapAngle) * snapAngle
+      // We offset the snap by Math.PI / 6 because the faces are offset
+      const faceOffset = Math.PI / 6 
+      
+      // Calculate which face angle is closest
+      const snappedRot = Math.round((currentRot - faceOffset) / snapAngle) * snapAngle + faceOffset
       
       groupRef.current.rotation.y = snappedRot
       // Reset wobble
       groupRef.current.rotation.x = 0
       groupRef.current.rotation.z = 0
 
-      // Determine winning face (the one pointing towards +Z)
+      // Determine winning face
       let normalizedRot = snappedRot % (Math.PI * 2)
       if (normalizedRot < 0) normalizedRot += Math.PI * 2
       
-      const steps = Math.round(normalizedRot / snapAngle)
+      // We know normalizedRot is roughly (N * 60 + 30) degrees
+      const steps = Math.round((normalizedRot - faceOffset) / snapAngle)
       const faceIndex = (6 - (steps % 6)) % 6
       
       onResult(FACES[faceIndex])
@@ -117,22 +125,24 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
 
       {/* Textos en las caras */}
       {FACES.map((text, i) => {
-        const angle = i * (Math.PI / 3)
+        // Offset by Math.PI / 6 so texts sit on the flat faces instead of the vertices
+        const angle = i * (Math.PI / 3) + (Math.PI / 6)
         // Position slightly outside the cylinder radius
-        const textRadius = bodyRadius + 0.01 
-        const x = Math.sin(angle) * textRadius
-        const z = Math.cos(angle) * textRadius
+        // The distance from center to face of a hexagon is radius * cos(30 deg)
+        const faceDistance = bodyRadius * Math.cos(Math.PI / 6) + 0.05
+        const x = Math.sin(angle) * faceDistance
+        const z = Math.cos(angle) * faceDistance
         
         return (
           <Text
             key={i}
             position={[x, 0, z]}
             rotation={[0, angle, 0]}
-            fontSize={0.3}
+            fontSize={0.25}
             color="#3E2723"
             anchorX="center"
             anchorY="middle"
-            maxWidth={bodyRadius * 1.2}
+            maxWidth={faceDistance * 1.5}
             textAlign="center"
             fontWeight="bold"
           >
