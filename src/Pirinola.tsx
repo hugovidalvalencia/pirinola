@@ -22,19 +22,29 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
   const groupRef = useRef<THREE.Group>(null)
   
   // Physics state
-  const [isSpinning, setIsSpinning] = useState(false)
+  const [phase, setPhase] = useState<'idle' | 'spinning' | 'falling'>('idle')
   const angularVelocity = useRef(0)
   const wobblePhase = useRef(0)
   
+  // Fall state
+  const targetSnapY = useRef(0)
+  const startFallX = useRef(0)
+  const startFallZ = useRef(0)
+  const startFallPosY = useRef(0)
+  const fallProgress = useRef(0)
+  
   // Reset when starting
   useEffect(() => {
-    if (appState === 'playing' && !isSpinning && angularVelocity.current === 0) {
-        // Just started playing or restarted
+    if (appState === 'playing' && phase === 'idle' && angularVelocity.current === 0) {
+        if (groupRef.current) {
+          groupRef.current.rotation.set(0, 0, 0)
+          groupRef.current.position.set(0, 1.5, 0)
+        }
     }
-  }, [appState, isSpinning])
+  }, [appState, phase])
 
   const bind = useDrag(({ velocity: [vx], direction: [dx], active }) => {
-    if (appState !== 'playing' || isSpinning) return
+    if (appState !== 'playing' || phase !== 'idle') return
     
     // Allow even smaller swipes to trigger a spin
     if (!active && Math.abs(vx) > 0.05) { 
@@ -43,59 +53,80 @@ export default function Pirinola({ appState, onResult }: PirinolaProps) {
       // Use the direction of the swipe (dx can be 0, so fallback to 1 if needed, though rare)
       const dir = dx === 0 ? 1 : Math.sign(dx)
       angularVelocity.current = speed * dir
-      setIsSpinning(true)
+      setPhase('spinning')
     }
   }, { filterTaps: true })
 
   useFrame((state, delta) => {
-    if (!groupRef.current || !isSpinning) return
+    if (!groupRef.current) return
 
-    const damping = 0.992 // Lower friction = spins longer
-    
-    // Apply rotation
-    groupRef.current.rotation.y += angularVelocity.current * delta
-    
-    // Apply friction
-    angularVelocity.current *= damping
+    if (phase === 'spinning') {
+      const damping = 0.992 // Lower friction = spins longer
+      
+      // Apply rotation
+      groupRef.current.rotation.y += angularVelocity.current * delta
+      
+      // Apply friction
+      angularVelocity.current *= damping
 
-    // Wobble effect as it slows down
-    const absVelocity = Math.abs(angularVelocity.current)
-    if (absVelocity < 12 && absVelocity > 0.1) {
-      wobblePhase.current += delta * 15
-      // Wobble intensity increases as speed decreases
-      const wobbleIntensity = (12 - absVelocity) * 0.04
-      groupRef.current.rotation.x = Math.sin(wobblePhase.current) * wobbleIntensity
-      groupRef.current.rotation.z = Math.cos(wobblePhase.current) * wobbleIntensity
-    }
+      // Wobble effect as it slows down
+      const absVelocity = Math.abs(angularVelocity.current)
+      if (absVelocity < 12 && absVelocity > 0.1) {
+        wobblePhase.current += delta * 15
+        // Wobble intensity increases as speed decreases
+        const wobbleIntensity = (12 - absVelocity) * 0.04
+        groupRef.current.rotation.x = Math.sin(wobblePhase.current) * wobbleIntensity
+        groupRef.current.rotation.z = Math.cos(wobblePhase.current) * wobbleIntensity
+      }
 
-    // Stop condition
-    if (absVelocity < 0.15) {
-      setIsSpinning(false)
-      angularVelocity.current = 0
+      // Stop condition
+      if (absVelocity < 0.15) {
+        setPhase('falling')
+        angularVelocity.current = 0
+        fallProgress.current = 0
+        
+        // Calculate Snap Y immediately
+        const currentRot = groupRef.current.rotation.y
+        const snapAngle = Math.PI / 3 // 60 degrees
+        const faceOffset = Math.PI / 6 
+        
+        targetSnapY.current = Math.round((currentRot - faceOffset) / snapAngle) * snapAngle + faceOffset
+        startFallX.current = groupRef.current.rotation.x
+        startFallZ.current = groupRef.current.rotation.z
+        startFallPosY.current = groupRef.current.position.y
+      }
+    } else if (phase === 'falling') {
+      // Animate the fall
+      fallProgress.current += delta * 3 // 0.33 seconds to fall
+      const t = Math.min(fallProgress.current, 1)
       
-      // Snap to nearest face
-      const currentRot = groupRef.current.rotation.y
-      const snapAngle = Math.PI / 3 // 60 degrees
-      // We offset the snap by Math.PI / 6 because the faces are offset
-      const faceOffset = Math.PI / 6 
+      // Acceleration curve for gravity feel
+      const ease = t * t * t
       
-      // Calculate which face angle is closest
-      const snappedRot = Math.round((currentRot - faceOffset) / snapAngle) * snapAngle + faceOffset
+      groupRef.current.rotation.y = targetSnapY.current // Snap Y immediately so it aligns perfectly flat
+      groupRef.current.rotation.x = THREE.MathUtils.lerp(startFallX.current, -Math.PI / 2, ease)
+      groupRef.current.rotation.z = THREE.MathUtils.lerp(startFallZ.current, 0, ease)
       
-      groupRef.current.rotation.y = snappedRot
-      // Reset wobble
-      groupRef.current.rotation.x = 0
-      groupRef.current.rotation.z = 0
+      // The distance from center to flat face is bodyRadius * cos(30) = 1.299
+      // The table is at Y = -0.5
+      // Target Y so face hits Mesa: 1.299 - 0.5 = 0.799
+      const targetPosY = 0.799
+      groupRef.current.position.y = THREE.MathUtils.lerp(startFallPosY.current, targetPosY, ease)
 
-      // Determine winning face
-      let normalizedRot = snappedRot % (Math.PI * 2)
-      if (normalizedRot < 0) normalizedRot += Math.PI * 2
-      
-      // We know normalizedRot is roughly (N * 60 + 30) degrees
-      const steps = Math.round((normalizedRot - faceOffset) / snapAngle)
-      const faceIndex = (6 - (steps % 6)) % 6
-      
-      onResult(FACES[faceIndex])
+      if (t === 1) {
+        setPhase('idle')
+        
+        // Determine winning face (the one pointing +Y, which was originally at -Z)
+        // Convert snapped Y rotation to degrees
+        const degY = (targetSnapY.current * 180 / Math.PI) % 360
+        
+        // Find which face index was at -Z before falling
+        // Formula derived: i = (150 - degY) / 60
+        let index = Math.round((150 - degY) / 60) % 6
+        if (index < 0) index += 6
+        
+        onResult(FACES[index])
+      }
     }
   })
 
